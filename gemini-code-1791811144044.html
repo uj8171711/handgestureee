@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>Reel 原版重現 - 手勢、球體、數字與臉部辨識整合系統 (第40版)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 0;
+      background-color: #0f0f12;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      min-height: 100vh;
+      font-family: -apple-system, sans-serif;
+      color: #ffffff;
+      overflow: hidden;
+    }
+    
+    #top-hud-container {
+      position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+      z-index: 100; pointer-events: none;
+    }
+
+    .interactive-element { pointer-events: auto; }
+
+    #status-text {
+      background: rgba(255, 255, 255, 0.12); backdrop-filter: blur(16px);
+      padding: 10px 24px; border-radius: 30px; font-size: 14px; font-weight: 500;
+      border: 1px solid rgba(255, 255, 255, 0.2); box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      white-space: nowrap; transition: all 0.3s ease;
+    }
+
+    #control-row-group {
+      display: flex;
+      gap: 6px;
+      align-items: stretch;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    #ui-panel {
+      background: rgba(20, 20, 25, 0.85); backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.15); border-radius: 16px;
+      padding: 12px 16px; display: flex; flex-direction: column; gap: 10px;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      width: 180px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    #ui-panel.collapsed {
+      height: 36px; width: 130px; padding: 4px 10px;
+      flex-direction: row; align-items: center; justify-content: center; cursor: pointer;
+    }
+    #ui-panel.collapsed #ui-content { display: none; }
+    
+    #ui-toggle { 
+      cursor: pointer; font-weight: bold; font-size: 12px; text-align: center; 
+      padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.1); 
+    }
+    #ui-panel.collapsed #ui-toggle { border-bottom: none; padding-bottom: 0; }
+    
+    .color-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+    .color-row input[type="color"] {
+      -webkit-appearance: none; border: none; width: 24px; height: 24px;
+      border-radius: 50%; cursor: pointer; background: none;
+    }
+    .color-row input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+    .color-row input[type="color"]::-webkit-color-swatch { border: 2px solid rgba(255, 255, 255, 0.3); border-radius: 50%; }
+
+    .btn-group { display: flex; gap: 6px; margin-top: 4px; }
+    .preset-btn, .control-btn {
+      background: rgba(255,255,255,0.15); border: none; border-radius: 8px;
+      color: white; font-size: 11px; padding: 6px 8px; cursor: pointer; transition: background 0.2s;
+      display: flex; align-items: center; justify-content: center; white-space: nowrap;
+    }
+    .preset-btn { flex: 1; }
+    .preset-btn:hover, .control-btn:hover { background: rgba(255,255,255,0.3); }
+    .control-btn.off { background: rgba(255, 50, 50, 0.4); }
+    .control-btn.off:hover { background: rgba(255, 50, 50, 0.6); }
+
+    #canvas-container { display: flex; align-items: center; justify-content: center; position: relative; }
+    canvas { border-radius: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.5); border: 1px solid rgba(255, 255, 255, 0.08); }
+    #webcam { display: none; }
+    
+    #start-overlay {
+      position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(0, 0, 0, 0.85); z-index: 9999;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      cursor: pointer; backdrop-filter: blur(5px);
+    }
+    .start-btn {
+      background: linear-gradient(135deg, #00b0ff, #00e676);
+      padding: 15px 40px; border-radius: 40px; font-size: 20px; font-weight: bold;
+      color: white; box-shadow: 0 10px 30px rgba(0, 230, 118, 0.4);
+      transition: transform 0.2s; text-align: center;
+    }
+    .start-btn:hover { transform: scale(1.05); }
+  </style>
+</head>
+<body>
+
+  <div id="start-overlay" onclick="startExperience()">
+    <div class="start-btn">👆 點擊畫面開始<br><span style="font-size:14px; font-weight:normal;">(解鎖手勢、數字、音效與臉部辨識系統)</span></div>
+  </div>
+
+  <div id="top-hud-container">
+    <div id="status-text" class="interactive-element">等待啟動...</div>
+
+    <div id="control-row-group">
+      <div id="ui-panel" class="collapsed interactive-element" onclick="toggleUI(event)">
+        <div id="ui-toggle">🎨 顏色控制</div>
+        <div id="ui-content" onclick="event.stopPropagation()">
+          <div class="color-row"><span>第一手</span><input type="color" id="colorH0" value="#ffcc00" onchange="updateCustomPalette(0, this.value)"></div>
+          <div class="color-row"><span>第二手</span><input type="color" id="colorH1" value="#00e676" onchange="updateCustomPalette(1, this.value)"></div>
+          <div class="color-row"><span>第三手</span><input type="color" id="colorH2" value="#00b0ff" onchange="updateCustomPalette(2, this.value)"></div>
+          <div class="color-row"><span>第四手</span><input type="color" id="colorH3" value="#aa00ff" onchange="updateCustomPalette(3, this.value)"></div>
+          
+          <div class="btn-group">
+            <button class="preset-btn" onclick="setPreset('rainbow')">彩色</button>
+            <button class="preset-btn" onclick="setPreset('monotone')">單色</button>
+          </div>
+        </div>
+      </div>
+
+      <button id="audio-toggle-btn" class="control-btn interactive-element" onclick="toggleAudio()">🔊 音效</button>
+      <button id="gesture-toggle-btn" class="control-btn interactive-element" onclick="toggleGestureFeature()">🖐️ 手勢</button>
+      <button id="number-toggle-btn" class="control-btn interactive-element" onclick="toggleNumberFeature()">🔢 數字</button>
+      <button id="face-toggle-btn" class="control-btn interactive-element" onclick="toggleFaceFeature()">😊 臉部</button>
+    </div>
+  </div>
+
+  <div id="canvas-container">
+    <video id="webcam" playsinline></video>
+  </div>
+
+  <script>
+    function toggleUI(e) {
+      let panel = document.getElementById('ui-panel');
+      panel.classList.toggle('collapsed');
+      document.getElementById('ui-toggle').innerText = panel.classList.contains('collapsed') ? '🎨 顏色控制' : '🎨 顏色控制 (收起)';
+    }
+
+    let isAudioEnabled = true;
+    function toggleAudio() {
+      isAudioEnabled = !isAudioEnabled;
+      let btn = document.getElementById('audio-toggle-btn');
+      btn.innerText = isAudioEnabled ? "🔊 音效" : "🔇 音效";
+      btn.classList.toggle('off', !isAudioEnabled);
+    }
+
+    let isGestureEnabled = true;
+    function toggleGestureFeature() {
+      isGestureEnabled = !isGestureEnabled;
+      let btn = document.getElementById('gesture-toggle-btn');
+      btn.innerText = isGestureEnabled ? "🖐️ 手勢" : "🛑 手勢";
+      btn.classList.toggle('off', !isGestureEnabled);
+    }
+
+    let isNumberEnabled = true;
+    function toggleNumberFeature() {
+      isNumberEnabled = !isNumberEnabled;
+      let btn = document.getElementById('number-toggle-btn');
+      btn.innerText = isNumberEnabled ? "🔢 數字" : "🔢 數字";
+      btn.classList.toggle('off', !isNumberEnabled);
+    }
+
+    let isFaceEnabled = true;
+    function toggleFaceFeature() {
+      isFaceEnabled = !isFaceEnabled;
+      let btn = document.getElementById('face-toggle-btn');
+      btn.innerText = isFaceEnabled ? "😊 臉部" : "😊 臉部";
+      btn.classList.toggle('off', !isFaceEnabled);
+    }
+
+    function hexToRgb(hex) {
+      let bigint = parseInt(hex.slice(1), 16);
+      return [(bigint >> 16) & 255, (bigint >> 8) & 255, bigint & 255];
+    }
+
+    const rainbowPresets = [
+      [[230, 0, 92], [255, 204, 0], [0, 230, 118], [0, 176, 255], [170, 0, 255]], 
+      [[255, 87, 34], [255, 152, 0], [205, 220, 57], [0, 188, 212], [63, 81, 181]], 
+      [[233, 30, 99], [156, 39, 176], [103, 58, 183], [3, 169, 244], [0, 150, 136]], 
+      [[244, 67, 54], [139, 195, 74], [255, 235, 59], [233, 30, 99], [96, 125, 139]]  
+    ];
+
+    let handPalettes = JSON.parse(JSON.stringify(rainbowPresets));
+
+    function setPreset(type) {
+      if (type === 'rainbow') {
+        handPalettes = JSON.parse(JSON.stringify(rainbowPresets));
+      } else if (type === 'monotone') {
+        let baseColors = ['#ffcc00', '#00e676', '#00b0ff', '#aa00ff'];
+        for(let h=0; h<4; h++) {
+          let rgb = hexToRgb(baseColors[h]);
+          let tones = [];
+          for(let i=0; i<5; i++) {
+            let f = 1.0 - (i * 0.12);
+            tones.push([Math.max(0, rgb[0]*f), Math.max(0, rgb[1]*f), Math.max(0, rgb[2]*f)]);
+          }
+          handPalettes[h] = tones;
+        }
+      }
+    }
+
+    function updateCustomPalette(handIdx, hexValue) {
+      let rgb = hexToRgb(hexValue);
+      let tones = [];
+      for(let i=0; i<5; i++) {
+        let f = 1.0 - (i * 0.1);
+        tones.push([Math.max(0, rgb[0]*f), Math.max(0, rgb[1]*f), Math.max(0, rgb[2]*f)]);
+      }
+      handPalettes[handIdx] = tones;
+    }
+
+    let multiHandLandmarks = null;
+    let faceLandmarks = null;
+    
+    let ball = {
+      x: 230, y: 160, vx: 0, vy: 0,
+      radius: 28, mass: 2.2, 
+      isHeld: false, heldByTwo: false,
+      sx: 1.0, sy: 1.0, svx: 0, svy: 0, angle: 0
+    };
+
+    let audioCtx = null;
+    let lastWallAudio = 0, lastClapAudio = 0, lastPopAudio = 0;
+    let fingerTouchStates = {}; 
+    let prevWristX = {}; 
+
+    let handGestureTimers = {}; 
+    let handTextColors = {}; 
+    let handThumbsUpTexts = {}; 
+
+    let tutorialPrompts = [
+      "👋 試試看比出手勢或觀察臉部圓形與眼口狀態！",
+      "🤏 試試看用手指把球拿起並拉伸它！"
+    ];
+    let promptShowCounts = {}; 
+    let activeDynamicMessage = null; 
+
+    function setup() {
+      let canvas = createCanvas(1040, 500);
+      canvas.parent('canvas-container');
+    }
+
+    function startExperience() {
+      document.getElementById('start-overlay').style.display = 'none';
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      requestCameraAndStart();
+    }
+
+    function playDongSound(intensity) {
+      if (!isAudioEnabled || !audioCtx || millis() - lastWallAudio < 150) return;
+      lastWallAudio = millis();
+      try {
+        let osc = audioCtx.createOscillator(); let gain = audioCtx.createGain();
+        osc.type = 'sine'; osc.frequency.setValueAtTime(80 + intensity * 8, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(30, audioCtx.currentTime + 0.15);
+        gain.gain.setValueAtTime(Math.min(0.15 + intensity * 0.1, 0.3), audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.15);
+      } catch(e) {}
+    }
+
+    function playPopSound(fingerIdx) {
+      if (!isAudioEnabled || !audioCtx || millis() - lastPopAudio < 100) return;
+      lastPopAudio = millis();
+      try {
+        let osc = audioCtx.createOscillator(); let gain = audioCtx.createGain();
+        osc.type = 'sine'; osc.frequency.setValueAtTime(500 + fingerIdx * 40, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(200, audioCtx.currentTime + 0.08);
+        gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.08);
+      } catch(e) {}
+    }
+
+    function playClapSound() {
+      if (!isAudioEnabled || !audioCtx || millis() - lastClapAudio < 150) return;
+      lastClapAudio = millis();
+      try {
+        let osc = audioCtx.createOscillator(); let gain = audioCtx.createGain();
+        osc.type = 'square'; osc.frequency.setValueAtTime(550, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(150, audioCtx.currentTime + 0.06);
+        gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.06);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.06);
+      } catch(e) {}
+    }
+
+    function playStretchSound() {
+      if (!isAudioEnabled || !audioCtx) return;
+      try {
+        let osc = audioCtx.createOscillator(); let gain = audioCtx.createGain();
+        osc.type = 'triangle'; osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+        osc.frequency.linearRampToValueAtTime(300, audioCtx.currentTime + 0.15);
+        gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.15);
+      } catch(e) {}
+    }
+
+    function playReleaseSound() {
+      if (!isAudioEnabled || !audioCtx) return;
+      try {
+        let osc = audioCtx.createOscillator(); let gain = audioCtx.createGain();
+        osc.type = 'sine'; osc.frequency.setValueAtTime(500, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(80, audioCtx.currentTime + 0.15);
+        gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.15);
+      } catch(e) {}
+    }
+
+    function getPt(lm, idx, w, h) { return { x: (1 - lm[idx].x) * w, y: lm[idx].y * h }; }
+
+    function detectGesture(lm, w, h) {
+      let wrist = getPt(lm, 0, w, h);
+      let mcp9 = getPt(lm, 9, w, h);
+      let handSize = Math.hypot(mcp9.x - wrist.x, mcp9.y - wrist.y);
+
+      let foldedCount = 0, extendedCount = 0;
+      [8, 12, 16, 20].forEach(idx => {
+        let tip = getPt(lm, idx, w, h);
+        let dist = Math.hypot(tip.x - wrist.x, tip.y - wrist.y);
+        if (dist < handSize * 1.25) foldedCount++;
+        if (dist > handSize * 1.7) extendedCount++; 
+      });
+
+      let t8 = getPt(lm, 8, w, h), t12 = getPt(lm, 12, w, h);
+      let t16 = getPt(lm, 16, w, h), t20 = getPt(lm, 20, w, h);
+      let gap = Math.max(Math.hypot(t8.x - t12.x, t8.y - t12.y), Math.hypot(t12.x - t16.x, t12.y - t16.y), Math.hypot(t16.x - t20.x, t16.y - t20.y));
+
+      if (foldedCount >= 4) return 'fist';
+      if (extendedCount >= 4 && gap < handSize * 0.22) return 'joined';
+      return 'open'; 
+    }
+
+    function draw() {
+      background(15, 15, 18);
+      drawCameraView(20, 20, 460, 460);
+      drawArtView(560, 20, 460, 460);
+    }
+
+    function drawCameraView(x, y, w, h) {
+      push(); translate(x, y);
+      fill(25, 25, 30); stroke(255, 255, 255, 20); strokeWeight(1); rect(0, 0, w, h, 16);
+      noStroke(); fill(255, 255, 255, 150); textSize(12); textAlign(LEFT, TOP); text("CAMERA FEED", 16, 16);
+
+      if (multiHandLandmarks) {
+        const connections = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+        for (let hIdx = 0; hIdx < multiHandLandmarks.length; hIdx++) {
+          let lm = multiHandLandmarks[hIdx];
+          stroke(0, 220, 255); strokeWeight(2);
+          for(let conn of connections) {
+            let p1 = getPt(lm, conn[0], w, h);
+            let p2 = getPt(lm, conn[1], w, h);
+            line(p1.x, p1.y, p2.x, p2.y);
+          }
+          for (let pt of lm) {
+            fill(255, 50, 100); noStroke();
+            ellipse((1 - pt.x) * w, pt.y * h, 5, 5);
+          }
+        }
+      }
+      pop();
+    }
+
+    function drawArtView(x, y, w, h) {
+      push(); translate(x, y);
+      fill(245, 245, 250); rect(0, 0, w, h, 16);
+
+      let activeHandCount = multiHandLandmarks ? multiHandLandmarks.length : 0;
+      updateInteractiveSlime(w, h, activeHandCount);
+      checkFingerCollisions(activeHandCount, w, h);
+
+      blendMode(MULTIPLY);
+
+      let handStates = []; 
+      let allExtendedFingers = []; 
+      let currentTime = millis();
+
+      if (activeHandCount > 0) {
+        const triplets = [[4,3,2], [8,6,5], [12,10,9], [16,14,13], [20,18,17]];
+        
+        for (let hIdx = 0; hIdx < activeHandCount; hIdx++) {
+          let lm = multiHandLandmarks[hIdx];
+          let wrist = getPt(lm, 0, w, h);
+          let mcp9 = getPt(lm, 9, w, h);
+          let palmDist = Math.hypot(mcp9.x - wrist.x, mcp9.y - wrist.y);
+          let depthScale = constrain(map(palmDist, 60, 150, 0.8, 1.2), 0.7, 1.3);
+          
+          let gesture = detectGesture(lm, w, h);
+          let isAnyTouching = false;
+          
+          for (let i = 0; i < 5; i++) {
+            let tip = getPt(lm, triplets[i][0], w, h);
+            let distToBall = Math.hypot(tip.x - ball.x, tip.y - ball.y);
+            let isTouching = (distToBall < ball.radius + 15);
+            let stateKey = `${hIdx}-${i}`;
+            
+            if (isTouching && !fingerTouchStates[stateKey]) playPopSound(i);
+            fingerTouchStates[stateKey] = isTouching;
+            if (isTouching) isAnyTouching = true;
+          }
+
+          let handMidColor = handPalettes[hIdx % 4][2]; 
+
+          if (gesture === 'fist') {
+            let cx = (wrist.x + mcp9.x) / 2;
+            let cy = (wrist.y + mcp9.y) / 2;
+            let fistSize = palmDist * 1.1; 
+            
+            fill(handMidColor[0], handMidColor[1], handMidColor[2], isAnyTouching ? 255 : 200);
+            noStroke();
+            ellipse(cx, cy, fistSize, fistSize);
+
+          } else if (gesture === 'joined') {
+            let tip12 = getPt(lm, 12, w, h);
+            let mcp5 = getPt(lm, 5, w, h);
+            let mcp17 = getPt(lm, 17, w, h);
+            let handWidth = Math.hypot(mcp5.x - mcp17.x, mcp5.y - mcp17.y) * 1.5;
+            
+            fill(handMidColor[0], handMidColor[1], handMidColor[2], isAnyTouching ? 255 : 200);
+            noStroke();
+            drawSmoothBendingRectangle(wrist, mcp9, tip12, handWidth);
+
+          } else {
+            for (let i = 0; i < 5; i++) {
+              let tip = getPt(lm, triplets[i][0], w, h);
+              let pip = getPt(lm, triplets[i][1], w, h);
+              let mcp = getPt(lm, triplets[i][2], w, h);
+              
+              let fingerWidth = constrain(18 * depthScale, 14, 26);
+              let colorRGB = handPalettes[hIdx % 4][i];
+              let isTouching = fingerTouchStates[`${hIdx}-${i}`];
+              
+              fill(colorRGB[0], colorRGB[1], colorRGB[2], isTouching ? 255 : 200);
+              noStroke();
+
+              let bendDist = Math.hypot(tip.x - mcp.x, tip.y - mcp.y);
+              if (bendDist < 45 * depthScale) {
+                ellipse(pip.x, pip.y, fingerWidth * 1.5, fingerWidth * 1.5);
+              } else {
+                drawSmoothBendingRectangle(mcp, pip, tip, fingerWidth);
+              }
+            }
+          }
+
+          let tip4 = getPt(lm, 4, w, h);   
+          let tip8 = getPt(lm, 8, w, h);   
+          let tip12 = getPt(lm, 12, w, h); 
+          let tip16 = getPt(lm, 16, w, h); 
+          let tip20 = getPt(lm, 20, w, h); 
+
+          let thumbExtended = Math.hypot(tip4.x - wrist.x, tip4.y - wrist.y) > palmDist * 1.35; 
+          let indexExtended = Math.hypot(tip8.x - wrist.x, tip8.y - wrist.y) > palmDist * 1.4;
+          let middleExtended = Math.hypot(tip12.x - wrist.x, tip12.y - wrist.y) > palmDist * 1.4;
+          let ringExtended = Math.hypot(tip16.x - wrist.x, tip16.y - wrist.y) > palmDist * 1.4;
+          let pinkyExtended = Math.hypot(tip20.x - wrist.x, tip20.y - wrist.y) > palmDist * 1.3;
+
+          let extensions = [thumbExtended, indexExtended, middleExtended, ringExtended, pinkyExtended];
+          let tips = [tip4, tip8, tip12, tip16, tip20];
+
+          if (isNumberEnabled) {
+            for (let f = 0; f < 5; f++) {
+              if (extensions[f]) {
+                allExtendedFingers.push({ x: tips[f].x, y: tips[f].y - 22 });
+              }
+            }
+          }
+
+          let indexFolded = !indexExtended;
+          let middleFolded = !middleExtended;
+          let ringFolded = !ringExtended;
+          let pinkyFolded = !pinkyExtended;
+          let fingersSpread = Math.hypot(tip8.x - tip12.x, tip8.y - tip12.y) > palmDist * 0.25;
+
+          let isYaRaw = indexExtended && middleExtended && ringFolded && pinkyFolded && fingersSpread;
+          let isOkRaw = middleExtended && ringExtended && pinkyExtended && !thumbExtended && indexFolded;
+          let isThumbsUpRaw = thumbExtended && indexFolded && middleFolded && ringFolded && pinkyFolded;
+
+          let isHandOpen = (gesture === 'open');
+          let currentWristX = wrist.x;
+          let lastX = prevWristX[hIdx] !== undefined ? prevWristX[hIdx] : currentWristX;
+          let wristSpeedX = Math.abs(currentWristX - lastX);
+          prevWristX[hIdx] = currentWristX;
+          let isHiRaw = isHandOpen && (wristSpeedX > 4.0); 
+
+          let isErrorRaw = middleExtended && indexFolded && ringFolded && pinkyFolded;
+
+          if (!handGestureTimers[hIdx]) handGestureTimers[hIdx] = {};
+          if (!handTextColors[hIdx]) handTextColors[hIdx] = {};
+          if (!handThumbsUpTexts[hIdx]) handThumbsUpTexts[hIdx] = "GOOD!";
+
+          function checkStable(name, rawCondition, defaultColor) {
+            let tObj = handGestureTimers[hIdx][name];
+            if (!tObj) {
+              tObj = { startTime: currentTime, active: false };
+              handGestureTimers[hIdx][name] = tObj;
+            }
+
+            if (isGestureEnabled && rawCondition) {
+              let duration = (currentTime - tObj.startTime) / 1000.0;
+              if (duration >= 0.02 && duration <= 0.25) {
+                if (!tObj.active && name === 'thumbsUp') {
+                  handThumbsUpTexts[hIdx] = Math.random() < 0.5 ? "GOOD!" : "PERFECTTT!";
+                }
+                tObj.active = true;
+                if (!handTextColors[hIdx][name]) {
+                  if (defaultColor) {
+                    handTextColors[hIdx][name] = defaultColor;
+                  } else {
+                    colorMode(HSB, 360, 100, 100);
+                    handTextColors[hIdx][name] = color(random(360), 90, 100);
+                    colorMode(RGB, 255, 255, 255);
+                  }
+                }
+              }
+            } else {
+              tObj.startTime = currentTime;
+              tObj.active = false;
+              handTextColors[hIdx][name] = null;
+            }
+            return tObj.active;
+          }
+
+          let stableYa = checkStable('ya', isYaRaw);
+          let stableOk = checkStable('ok', isOkRaw);
+          let stableThumbsUp = checkStable('thumbsUp', isThumbsUpRaw);
+          let stableHi = checkStable('hi', isHiRaw);
+          let stableError = checkStable('error', isErrorRaw, color(255, 30, 30));
+
+          handStates.push({
+            isYa: stableYa,
+            yaColor: handTextColors[hIdx].ya,
+            yaPos: { x: (tip8.x + tip12.x) / 2, y: Math.min(tip8.y, tip12.y) - 20 },
+            
+            isOk: stableOk,
+            okColor: handTextColors[hIdx].ok,
+            okPos: { x: mcp9.x, y: wrist.y - 35 },
+
+            isThumbsUp: stableThumbsUp,
+            thumbsUpText: handThumbsUpTexts[hIdx],
+            thumbsUpColor: handTextColors[hIdx].thumbsUp,
+            thumbsUpPos: { x: tip4.x, y: tip4.y - 25 },
+
+            isHi: stableHi,
+            hiColor: handTextColors[hIdx].hi,
+            hiPos: { x: mcp9.x, y: wrist.y - 35 }, 
+
+            isError: stableError,
+            errorPos: { x: tip12.x, y: tip12.y - 25 }
+          });
+        }
+      }
+
+      blendMode(BLEND);
+      drawOptimized3DSlimeBall();
+
+      // --- 臉部辨識與圓形框、眼口狀態繪製 ---
+      if (isFaceEnabled && faceLandmarks) {
+        let nose = getPt(faceLandmarks, 1, w, h);
+        let chin = getPt(faceLandmarks, 152, w, h);
+        let leftEar = getPt(faceLandmarks, 234, w, h);
+        let rightEar = getPt(faceLandmarks, 454, w, h);
+
+        let faceWidth = Math.hypot(rightEar.x - leftEar.x, rightEar.y - leftEar.y);
+        let faceHeight = Math.hypot(chin.y - nose.y) * 2.2;
+        let faceRadius = Math.max(faceWidth, faceHeight) * 0.75;
+
+        // 繪製圓形臉部框
+        stroke(0, 230, 255, 200);
+        strokeWeight(3);
+        noFill();
+        ellipse(nose.x, nose.y - 10, faceRadius * 2, faceRadius * 2);
+
+        // 計算眼睛開合狀態 (上下眼瞼距離比對)
+        let leftEyeTop = getPt(faceLandmarks, 159, w, h);
+        let leftEyeBottom = getPt(faceLandmarks, 145, w, h);
+        let rightEyeTop = getPt(faceLandmarks, 386, w, h);
+        let rightEyeBottom = getPt(faceLandmarks, 374, w, h);
+        
+        let leftEyeDist = Math.hypot(leftEyeTop.x - leftEyeBottom.x, leftEyeTop.y - leftEyeBottom.y);
+        let rightEyeDist = Math.hypot(rightEyeTop.x - rightEyeBottom.x, rightEyeTop.y - rightEyeBottom.y);
+        let eyeState = (leftEyeDist > 5 && rightEyeDist > 5) ? "睜開" : "閉上";
+
+        // 計算嘴巴口型開合狀態 (上下唇距離)
+        let upperLip = getPt(faceLandmarks, 13, w, h);
+        let lowerLip = getPt(faceLandmarks, 14, w, h);
+        let mouthDist = Math.hypot(upperLip.x - lowerLip.x, upperLip.y - lowerLip.y);
+        let mouthState = (mouthDist > 12) ? "張開" : "閉合";
+
+        // 顯示於臉部框上方
+        noStroke();
+        fill(255, 255, 255, 230);
+        textSize(15);
+        textAlign(CENTER, CENTER);
+        text(`眼睛: ${eyeState} | 嘴巴: ${mouthState}`, nose.x, nose.y - faceRadius - 25);
+      }
+
+      blendMode(BLEND);
+      textSize(22);
+      textAlign(CENTER, CENTER);
+      textStyle(BOLD);
+
+      // 數字顯示系統 (單點顯示總數在最後一根手指頭上)
+      if (isNumberEnabled && allExtendedFingers.length > 0) {
+        let totalCount = Math.min(allExtendedFingers.length, 20);
+        let lastFinger = allExtendedFingers[allExtendedFingers.length - 1];
+        fill(0, 230, 255);
+        text(totalCount, lastFinger.x, lastFinger.y);
+      }
+
+      // 手勢文字系統
+      if (isGestureEnabled) {
+        for (let state of handStates) {
+          if (state.isYa && state.yaColor) {
+            fill(state.yaColor); textSize(24); text("YA✌️", state.yaPos.x, state.yaPos.y);
+          }
+          if (state.isOk && state.okColor) {
+            fill(state.okColor); textSize(26); text("OK!", state.okPos.x, state.okPos.y);
+          }
+          if (state.isThumbsUp && state.thumbsUpColor) {
+            fill(state.thumbsUpColor); textSize(26); text(state.thumbsUpText, state.thumbsUpPos.x, state.thumbsUpPos.y);
+          }
+          if (state.isHi && state.hiColor) {
+            fill(state.hiColor); textSize(28); text("HI!", state.hiPos.x, state.hiPos.y);
+          }
+          if (state.isError) {
+            fill(255, 30, 30); textSize(22); text("ERROR ⚠️", state.errorPos.x, state.errorPos.y);
+          }
+        }
+      }
+
+      pop();
+    }
+
+    function drawSmoothBendingRectangle(p0, p1, p2, w) {
+      let segments = 12;
+      let halfW = w / 2;
+      let leftPts = [], rightPts = [];
+
+      for (let i = 0; i <= segments; i++) {
+        let t = i / segments;
+        let x = (1-t)*(1-t)*p0.x + 2*(1-t)*t*p1.x + t*t*p2.x;
+        let y = (1-t)*(1-t)*p0.y + 2*(1-t)*t*p1.y + t*t*p2.y;
+        let dx = 2*(1-t)*(p1.x-p0.x) + 2*t*(p2.x-p1.x);
+        let dy = 2*(1-t)*(p1.y-p0.y) + 2*t*(p2.y-p1.y);
+        let len = Math.hypot(dx, dy) || 1;
+        
+        leftPts.push({ x: x + (-dy/len)*halfW, y: y + (dx/len)*halfW });
+        rightPts.push({ x: x - (-dy/len)*halfW, y: y - (dx/len)*halfW });
+      }
+
+      beginShape();
+      for (let p of leftPts) vertex(p.x, p.y);
+      for (let i = rightPts.length - 1; i >= 0; i--) vertex(rightPts[i].x, rightPts[i].y);
+      endShape(CLOSE);
+    }
+
+    function drawOptimized3DSlimeBall() {
+      let r = ball.radius;
+      push();
+      translate(ball.x, ball.y);
+      rotate(ball.angle);
+      scale(ball.sx, ball.sy);
+      
+      noStroke();
+      fill(0, 150, 255, 70);
+      ellipse(0, 0, r * 2, r * 2);
+
+      stroke(255, 255, 255, 180);
+      strokeWeight(2);
+      noFill();
+      ellipse(0, 0, r * 2, r * 2);
+      pop();
+
+      noStroke();
+      fill(255, 255, 255, 220);
+      ellipse(ball.x - r*0.3, ball.y - r*0.4, r*0.6, r*0.3);
+    }
+
+    function checkFingerCollisions(count, w, h) {
+      if (count === 0) return;
+      let tips = [];
+      for (let hIdx = 0; hIdx < count; hIdx++) {
+        let lm = multiHandLandmarks[hIdx];
+        [4, 8, 12, 16, 20].forEach(idx => tips.push({ hand: hIdx, x: getPt(lm, idx, w, h).x, y: getPt(lm, idx, w, h).y }));
+      }
+      for (let i = 0; i < tips.length; i++) {
+        for (let j = i + 1; j < tips.length; j++) {
+          if (tips[i].hand !== tips[j].hand) {
+            if (Math.hypot(tips[i].x - tips[j].x, tips[i].y - tips[j].y) < 25) playClapSound();
+          }
+        }
+      }
+    }
+
+    function updateInteractiveSlime(w, h, count) {
+      let pinchPoints = [];
+      let pinchDirs = []; 
+
+      if (count > 0) {
+        for (let hIdx = 0; hIdx < count; hIdx++) {
+          let lm = multiHandLandmarks[hIdx];
+          let idxX = getPt(lm, 8, w, h).x, idxY = getPt(lm, 8, w, h).y;
+          let thbX = getPt(lm, 4, w, h).x, thbY = getPt(lm, 4, w, h).y;
+
+          let distToIdx = Math.hypot(ball.x - idxX, ball.y - idxY);
+          let pinchDist = Math.hypot(idxX - thbX, idxY - thbY);
+          let pinchMidX = (idxX + thbX) / 2;
+          let pinchMidY = (idxY + thbY) / 2;
+          let distToMid = Math.hypot(ball.x - pinchMidX, ball.y - pinchMidY);
+
+          if (pinchDist < 40 && (distToMid < 75 || ball.isHeld)) {
+            pinchPoints.push({ x: pinchMidX, y: pinchMidY });
+            pinchDirs.push({ x: ball.x - pinchMidX, y: ball.y - pinchMidY });
+          } else if (distToIdx < ball.radius + 15 && pinchPoints.length === 0) {
+            let angle = Math.atan2(ball.y - idxY, ball.x - idxX);
+            ball.vx += Math.cos(angle) * (5 / ball.mass);
+            ball.vy += Math.sin(angle) * (5 / ball.mass);
+          }
+        }
+      }
+
+      let wasHeldByTwo = ball.heldByTwo;
+      let wasHeld = ball.isHeld;
+
+      if (pinchPoints.length >= 2) {
+        ball.isHeld = true; ball.heldByTwo = true;
+        let p1 = pinchPoints[0], p2 = pinchPoints[1];
+        let midX = (p1.x + p2.x)/2, midY = (p1.y + p2.y)/2;
+        let dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+        
+        ball.vx = (midX - ball.x) * 0.4;
+        ball.vy = (midY - ball.y) * 0.4;
+        ball.x += ball.vx; ball.y += ball.vy;
+        
+        ball.angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+        let targetSx = constrain(dist / (ball.radius * 2), 1.0, 8.0);
+        ball.sx += (targetSx - ball.sx) * 0.2; 
+        ball.sy = 1.0 / Math.sqrt(ball.sx);
+
+        if (!wasHeldByTwo) playStretchSound(); 
+
+      } else if (pinchPoints.length === 1) {
+        ball.isHeld = true; ball.heldByTwo = false;
+        
+        if (wasHeldByTwo) {
+           ball.svx = -(ball.sx - 1.0) * 0.5; 
+           playReleaseSound();
+        }
+        
+        let p1 = pinchPoints[0], dir = pinchDirs[0];
+        let len = Math.hypot(dir.x, dir.y) || 1;
+        let targetX = p1.x + (dir.x/len) * (ball.radius + 10);
+        let targetY = p1.y + (dir.y/len) * (ball.radius + 10);
+        
+        ball.vx = (targetX - ball.x) * 0.4;
+        ball.vy = (targetY - ball.y) * 0.4;
+        ball.x += ball.vx; ball.y += ball.vy;
+        
+        let speed = Math.hypot(ball.vx, ball.vy);
+        if (speed > 1) ball.angle = Math.atan2(ball.vy, ball.vx);
+        let targetSx = 1.0 + speed * 0.015;
+        ball.sx += (targetSx - ball.sx) * 0.2;
+        ball.sy = 1.0 / Math.sqrt(ball.sx);
+
+        if (!wasHeld) playStretchSound(); 
+
+      } else {
+        ball.isHeld = false; ball.heldByTwo = false;
+        if (wasHeld) {
+           ball.svx = -(ball.sx - 1.0) * 0.6; 
+           playReleaseSound();
+        }
+      }
+
+      if (!ball.isHeld) {
+        ball.vy += 0.4; 
+        ball.x += ball.vx; ball.y += ball.vy;
+        ball.vx *= 0.94; ball.vy *= 0.94; 
+      }
+
+      if (!ball.heldByTwo) {
+        let speed = Math.hypot(ball.vx, ball.vy);
+        if (speed > 1 && !ball.isHeld) ball.angle = Math.atan2(ball.vy, ball.vx);
+        
+        let targetSx = ball.isHeld ? 1.0 + speed*0.01 : 1.0 + speed*0.015;
+        ball.svx += (targetSx - ball.sx) * 0.06; 
+        ball.svx *= 0.85; 
+        ball.sx += ball.svx;
+        ball.sy = 1.0 / Math.sqrt(Math.max(ball.sx, 0.1));
+      }
+
+      let r = ball.radius;
+      let hitWall = false;
+      if (ball.x < r) { ball.x = r; ball.vx *= -0.8; hitWall = true; }
+      if (ball.x > w - r) { ball.x = w - r; ball.vx *= -0.8; hitWall = true; }
+      if (ball.y < r) { ball.y = r; ball.vy *= -0.8; hitWall = true; }
+      if (ball.y > h - r) { ball.y = h - r; ball.vy *= -0.8; hitWall = true; }
+
+      if (hitWall) {
+         let speed = Math.hypot(ball.vx, ball.vy);
+         if (speed > 1.5) {
+             playDongSound(speed);
+             ball.sx = 0.6; ball.sy = 1.4; 
+         }
+      }
+    }
+
+    function requestCameraAndStart() {
+      const videoElement = document.getElementById('webcam');
+      const statusText = document.getElementById('status-text');
+
+      const hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`
+      });
+      hands.setOptions({ maxNumHands: 4, modelComplexity: 0, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+
+      const faceMesh = new FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${file}`
+      });
+      faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+
+      hands.onResults((results) => {
+        multiHandLandmarks = results.multiHandLandmarks || null;
+      });
+
+      faceMesh.onResults((results) => {
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+          faceLandmarks = results.multiFaceLandmarks[0];
+        } else {
+          faceLandmarks = null;
+        }
+
+        let handCount = multiHandLandmarks ? multiHandLandmarks.length : 0;
+        if (handCount > 0 || faceLandmarks) {
+          let dynamicMsg = null;
+          if (ball.heldByTwo) {
+            dynamicMsg = "✨ 球已經被雙手拿起並拉伸中！";
+          } else if (ball.isHeld) {
+            dynamicMsg = "✨ 球已經被拿起！";
+          } else if (Math.abs(ball.sx - 1.0) > 0.3) {
+            dynamicMsg = "✨ 球正在被拉伸！";
+          }
+
+          if (dynamicMsg) {
+            statusText.innerText = dynamicMsg;
+          } else {
+            let availablePrompts = tutorialPrompts.filter(p => (promptShowCounts[p] || 0) < 2);
+            if (availablePrompts.length > 0 && Math.random() < 0.03) {
+              let chosenPrompt = availablePrompts[Math.floor(Math.random() * availablePrompts.length)];
+              promptShowCounts[chosenPrompt] = (promptShowCounts[chosenPrompt] || 0) + 1;
+              activeDynamicMessage = chosenPrompt;
+            }
+
+            if (activeDynamicMessage && Math.random() < 0.98) {
+              statusText.innerText = activeDynamicMessage;
+            } else {
+              activeDynamicMessage = null;
+              statusText.innerText = faceLandmarks ? `✨ 追蹤中 (手: ${handCount} 隻, 臉部已對齊)` : `✨ 追蹤中 (${handCount} 隻手)`;
+            }
+          }
+        } else {
+          activeDynamicMessage = null;
+          statusText.innerText = "請將手或臉放在鏡頭前...";
+        }
+      });
+
+      const camera = new Camera(videoElement, {
+        onFrame: async () => { 
+          await hands.send({ image: videoElement }); 
+          await faceMesh.send({ image: videoElement });
+        },
+        width: 640, height: 480
+      });
+      camera.start();
+    }
+  </script>
+</body>
+</html>
